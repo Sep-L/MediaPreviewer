@@ -1,0 +1,81 @@
+# ====================
+# 依赖
+# ====================
+node_modules/
+.pnp
+.pnp.js
+.pnp.loader.mjs
+
+# ====================
+# 构建产物
+# ====================
+dist/
+dist-ssr/
+*.local
+
+# ====================
+# Tauri
+# ====================
+src-tauri/target/
+src-tauri/gen/
+src-tauri/Cargo.lock
+
+# ====================
+# 编辑器
+# ====================
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.sublime-*
+
+# ====================
+# 操作系统
+# ====================
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# ====================
+# 日志
+# ====================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ====================
+# 环境变量
+# ====================
+.env
+.env.local
+.env.*.local
+
+# ====================
+# 缓存与临时文件
+# ====================
+.cache/
+.temp/
+*.tmp
+*.temp
+nul
+
+# ====================
+# 测试与覆盖率
+# ====================
+coverage/
+.nyc_output/
+
+# ====================
+# TypeScript
+# ====================
+*.tsbuildinfo
