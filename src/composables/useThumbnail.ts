@@ -1,6 +1,7 @@
 import { ref, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import type { MediaFile } from '../types'
+import { logger } from '../utils/logger'
 
 const imageCache = ref<Map<string, string>>(new Map())
 const loadingImages = ref<Set<string>>(new Set())
@@ -27,7 +28,7 @@ export function useThumbnail() {
       const url = URL.createObjectURL(blob)
       imageCache.value.set(file.path, url)
     } catch (error) {
-      console.error('Failed to load thumbnail:', file.path, error)
+      logger.error(`[缩略图] 加载失败: ${file.path}, 错误: ${JSON.stringify(error)}`)
     } finally {
       loadingImages.value.delete(file.path)
     }

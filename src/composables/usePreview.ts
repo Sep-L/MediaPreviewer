@@ -1,6 +1,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import type { MediaFile } from '../types'
+import { logger } from '../utils/logger'
 
 export function usePreview(allFiles: () => MediaFile[]) {
   const previewFile = ref<MediaFile | null>(null)
@@ -48,7 +49,7 @@ export function usePreview(allFiles: () => MediaFile[]) {
       const blob = new Blob([uint8Array], { type: 'image/png' })
       previewImageUrl.value = URL.createObjectURL(blob)
     } catch (error) {
-      console.error('Failed to load preview:', error)
+      logger.error(`[预览] 加载失败: ${file.path}, 错误: ${JSON.stringify(error)}`)
     } finally {
       isLoadingPreview.value = false
     }

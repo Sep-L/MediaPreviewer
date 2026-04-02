@@ -233,8 +233,6 @@ fn get_all_files(folder_paths: Vec<String>) -> Result<ReadFolderResult, String> 
 
 #[tauri::command]
 async fn get_thumbnail(file_path: String, size: u32) -> Result<Vec<u8>, String> {
-    info!("请求缩略图: {}, size: {}", file_path, size);
-    
     #[cfg(windows)]
     {
         tokio::task::spawn_blocking(move || {
@@ -400,6 +398,16 @@ fn get_file_stats(file_path: String) -> Result<FileStats, String> {
 }
 
 #[tauri::command]
+fn log_frontend(level: String, message: String) {
+    match level.as_str() {
+        "error" => error!("[前端] {}", message),
+        "warn" => log::warn!("[前端] {}", message),
+        "info" => info!("[前端] {}", message),
+        _ => info!("[前端] {}", message),
+    }
+}
+
+#[tauri::command]
 async fn open_in_explorer(file_path: String) -> Result<(), String> {
     let path = Path::new(&file_path);
     if !path.exists() {
@@ -533,6 +541,7 @@ pub fn run() {
             get_thumbnail,
             get_image_info,
             get_file_stats,
+            log_frontend,
             open_in_explorer,
             delete_file,
             delete_folder
