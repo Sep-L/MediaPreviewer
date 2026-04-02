@@ -4,6 +4,9 @@ use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
 use tauri::Manager;
+use log::{info, error};
+use fern::Dispatch;
+use chrono::{Local, Duration};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MediaFile {
@@ -44,6 +47,61 @@ const IMAGE_EXTENSIONS: &[&str] = &[
     "avif", "heic", "heif", "jxl", "jfif", "pjpeg", "pjp",
 ];
 
+fn setup_logging() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = std::env::current_exe()?;
+    let log_dir = exe_path.parent().unwrap().join("logs");
+    fs::create_dir_all(&log_dir)?;
+    
+    let log_file_path = log_dir.join(format!("app_{}.log", Local::now().format("%Y-%m-%d")));
+    
+    let log_file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file_path)?;
+    
+    Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "[{} {} {}:{}] {}",
+                Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                record.level(),
+                record.file().unwrap_or("unknown"),
+                record.line().unwrap_or(0),
+                message
+            ))
+        })
+        .level(log::LevelFilter::Info)
+        .chain(std::io::stdout())
+        .chain(log_file)
+        .apply()?;
+    
+    info!("日志系统初始化成功, 日志文件: {:?}", log_file_path);
+    
+    clean_old_logs(&log_dir, 7);
+    
+    Ok(())
+}
+
+fn clean_old_logs(log_dir: &Path, days: i64) {
+    let cutoff = Local::now() - Duration::days(days);
+    
+    if let Ok(entries) = fs::read_dir(log_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            if let Ok(metadata) = entry.metadata() {
+                if metadata.is_file() {
+                    if let Some(modified) = metadata.modified().ok() {
+                        let modified_datetime: chrono::DateTime<Local> = modified.into();
+                        if modified_datetime < cutoff {
+                            let _ = fs::remove_file(entry.path());
+                            info!("清理过期日志: {:?}", entry.path());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn get_file_type(extension: &str) -> String {
     let ext = extension.to_lowercase();
     if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
@@ -55,6 +113,7 @@ fn get_file_type(extension: &str) -> String {
 
 #[tauri::command]
 fn get_all_files(folder_paths: Vec<String>) -> Result<ReadFolderResult, String> {
+    info!("开始扫描文件夹: {:?}", folder_paths);
     let mut all_groups: Vec<FolderGroup> = Vec::new();
     
     for folder_path in folder_paths {
@@ -62,6 +121,7 @@ fn get_all_files(folder_paths: Vec<String>) -> Result<ReadFolderResult, String> 
         
         // 跳过不存在的路径和非文件夹
         if !path.exists() || !path.is_dir() {
+            error!("路径不存在或不是文件夹: {}", folder_path);
             continue;
         }
         
@@ -78,6 +138,7 @@ fn get_all_files(folder_paths: Vec<String>) -> Result<ReadFolderResult, String> 
         folder_map.entry(base_path.clone()).or_insert_with(Vec::new);
         
         // 递归遍历所有文件（包括根文件夹中的文件）
+        let mut file_count = 0;
         for entry in WalkDir::new(path)
             .min_depth(1)  // 包含根文件夹内的文件
             .into_iter()
@@ -86,6 +147,7 @@ fn get_all_files(folder_paths: Vec<String>) -> Result<ReadFolderResult, String> 
             let entry_path = entry.path();
             
             if entry_path.is_file() {
+                file_count += 1;
                 let extension = entry_path
                     .extension()
                     .map(|e| e.to_string_lossy().to_string())
@@ -116,6 +178,8 @@ fn get_all_files(folder_paths: Vec<String>) -> Result<ReadFolderResult, String> 
                     .push(file);
             }
         }
+        
+        info!("文件夹 {} 扫描完成, 共 {} 个文件", root_name, file_count);
         
         // 转换为分组列表
         for (folder_path, mut files) in folder_map {
@@ -162,19 +226,25 @@ fn get_all_files(folder_paths: Vec<String>) -> Result<ReadFolderResult, String> 
     });
     
     let total_count: usize = all_groups.iter().map(|g| g.files.len()).sum();
+    info!("扫描完成, 共 {} 个文件夹, {} 个文件", all_groups.len(), total_count);
     
     Ok(ReadFolderResult { groups: all_groups, total_count })
 }
 
 #[tauri::command]
 async fn get_thumbnail(file_path: String, size: u32) -> Result<Vec<u8>, String> {
+    info!("请求缩略图: {}, size: {}", file_path, size);
+    
     #[cfg(windows)]
     {
         tokio::task::spawn_blocking(move || {
             get_windows_thumbnail(&file_path, size)
         })
         .await
-        .map_err(|e| format!("任务执行失败: {}", e))?
+        .map_err(|e| {
+            error!("任务执行失败: {}", e);
+            format!("任务执行失败: {}", e)
+        })?
     }
     
     #[cfg(not(windows))]
@@ -354,8 +424,10 @@ async fn open_in_explorer(file_path: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn delete_file(file_path: String) -> Result<(), String> {
+    info!("删除文件: {}", file_path);
     let path = Path::new(&file_path);
     if !path.exists() {
+        error!("文件不存在: {}", file_path);
         return Err("文件不存在".to_string());
     }
 
@@ -382,6 +454,7 @@ async fn delete_file(file_path: String) -> Result<(), String> {
         unsafe {
             let result = SHFileOperationW(&mut file_op);
             if result != 0 {
+                error!("删除文件失败: 错误代码 {}", result);
                 return Err(format!("删除文件失败: 错误代码 {}", result));
             }
         }
@@ -393,17 +466,21 @@ async fn delete_file(file_path: String) -> Result<(), String> {
             .map_err(|e| format!("删除文件失败: {}", e))?;
     }
 
+    info!("文件删除成功: {}", file_path);
     Ok(())
 }
 
 #[tauri::command]
 async fn delete_folder(folder_path: String) -> Result<(), String> {
+    info!("删除文件夹: {}", folder_path);
     let path = Path::new(&folder_path);
     if !path.exists() {
+        error!("文件夹不存在: {}", folder_path);
         return Err("文件夹不存在".to_string());
     }
 
     if !path.is_dir() {
+        error!("路径不是文件夹: {}", folder_path);
         return Err("路径不是文件夹".to_string());
     }
 
@@ -430,6 +507,7 @@ async fn delete_folder(folder_path: String) -> Result<(), String> {
         unsafe {
             let result = SHFileOperationW(&mut file_op);
             if result != 0 {
+                error!("删除文件夹失败: 错误代码 {}", result);
                 return Err(format!("删除文件夹失败: 错误代码 {}", result));
             }
         }
@@ -441,6 +519,7 @@ async fn delete_folder(folder_path: String) -> Result<(), String> {
             .map_err(|e| format!("删除文件夹失败: {}", e))?;
     }
 
+    info!("文件夹删除成功: {}", folder_path);
     Ok(())
 }
 
@@ -459,6 +538,11 @@ pub fn run() {
             delete_folder
         ])
         .setup(|app| {
+            // 初始化日志系统
+            if let Err(e) = setup_logging() {
+                eprintln!("日志系统初始化失败: {}", e);
+            }
+            
             let window = app.get_webview_window("main").unwrap();
             // 设置窗口图标
             let icon_bytes = include_bytes!("../icons/128x128.png");
