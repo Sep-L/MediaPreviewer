@@ -2,6 +2,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import type { MediaFile } from '../types'
 import { logger } from '../utils/logger'
+import { getSetting, setSetting } from './useSettings'
 
 export function usePreview(allFiles: () => MediaFile[]) {
   const previewFile = ref<MediaFile | null>(null)
@@ -12,9 +13,11 @@ export function usePreview(allFiles: () => MediaFile[]) {
   const dragStart = ref({ x: 0, y: 0 })
   const isLoadingPreview = ref(false)
   const previewRotation = ref(0)
-  
-  // 从 localStorage 恢复缩放值
-  const savedZoom = ref(parseFloat(localStorage.getItem('previewZoom') || '1'))
+  const savedZoom = ref(1)
+
+  onMounted(async () => {
+    savedZoom.value = await getSetting('previewZoom', 1)
+  })
 
   // 当前文件在列表中的索引
   const currentIndex = computed(() => {
@@ -55,9 +58,9 @@ export function usePreview(allFiles: () => MediaFile[]) {
     }
   }
 
-  function closePreview() {
+  async function closePreview() {
     savedZoom.value = previewZoom.value
-    localStorage.setItem('previewZoom', String(previewZoom.value))
+    await setSetting('previewZoom', previewZoom.value)
     
     if (previewImageUrl.value) {
       URL.revokeObjectURL(previewImageUrl.value)

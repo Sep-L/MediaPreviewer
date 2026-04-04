@@ -9,6 +9,7 @@ import type { MediaFile, FolderGroup, ReadFolderResult, FileFilter } from './typ
 import { useThumbnail } from './composables/useThumbnail'
 import { usePreview } from './composables/usePreview'
 import { useRecentFolders } from './composables/useRecentFolders'
+import { getSetting, setSetting } from './composables/useSettings'
 
 import Sidebar from './components/Sidebar.vue'
 import EmptyState from './components/EmptyState.vue'
@@ -79,11 +80,17 @@ const currentZoom = ref(DEFAULT_CURRENT_ZOOM)
 const allFiles = computed(() => groups.value.flatMap(g => g.files))
 
 const filteredGroups = computed(() => {
-  if (currentFilter.value === 'all') return groups.value
-  return groups.value.map(g => ({
-    ...g,
-    files: g.files.filter(f => f.file_type === currentFilter.value)
-  })).filter(g => g.files.length > 0 || g.level === 1)  // 保留有文件的文件夹，以及根文件夹
+  let result = groups.value
+  if (currentFilter.value !== 'all') {
+    result = result.map(g => ({
+      ...g,
+      files: g.files.filter(f => f.file_type === currentFilter.value)
+    })).filter(g => g.files.length > 0 || g.level === 1)
+  }
+  return result.sort((a, b) => {
+    if (a.level !== b.level) return a.level - b.level
+    return a.folder_path.localeCompare(b.folder_path)
+  })
 })
 
 const fileCountByType = computed(() => {
@@ -220,7 +227,7 @@ async function loadMultipleFolders(folderPaths: string[]) {
       }
     })
     currentFolderPath.value = folderPaths.join(' | ')
-    addToRecentFolders(folderPaths)
+    await addToRecentFolders(folderPaths)
 
     const imageFiles = allFiles.value.filter(f => f.file_type === 'image')
     loadAllThumbnails(imageFiles, getGridSizePx())
@@ -256,7 +263,7 @@ function handleKeydown(event: KeyboardEvent) {
 }
 
 // 滚轮事件 - Ctrl+滚轮调整图片大小
-function handleWheel(event: WheelEvent) {
+async function handleWheel(event: WheelEvent) {
   if (!event.ctrlKey) return
   event.preventDefault()
   const stepPercent = zoomStep.value / 100
@@ -264,7 +271,8 @@ function handleWheel(event: WheelEvent) {
   gridPercent.value = Math.max(1, gridPercent.value * (1 + delta))
   // 更新 CSS 变量（百分比），浏览器自动响应
   document.documentElement.style.setProperty('--grid-percent', `${gridPercent.value.toFixed(2)}%`)
-  localStorage.setItem('gridPercent', String(gridPercent.value))
+  document.documentElement.style.setProperty('--grid-percent', `${gridPercent.value.toFixed(2)}%`)
+  await setSetting('gridPercent', gridPercent.value)
 }
 
 // 防抖更新当前高亮的文件夹
@@ -305,8 +313,8 @@ function updateActiveFolder() {
 }
 
 // 存储配置的方法
-function saveZoomStep() {
-  localStorage.setItem(ZOOM_STEP_KEY, String(zoomStep.value))
+async function saveZoomStep() {
+  await setSetting(ZOOM_STEP_KEY, zoomStep.value)
 }
 
 // 根据期望的每行图片数量计算实际的 百分比
@@ -316,8 +324,8 @@ function calculatePercentFromImagesPerRow(imagesPerRow: number): number {
   return imageWidth
 }
 
-function saveCurrentZoom() {
-  localStorage.setItem(CURRENT_ZOOM_KEY, String(currentZoom.value))
+async function saveCurrentZoom() {
+  await setSetting(CURRENT_ZOOM_KEY, currentZoom.value)
   const imagesPerRow = 100 / currentZoom.value
   gridPercent.value = calculatePercentFromImagesPerRow(imagesPerRow)
   document.documentElement.style.setProperty('--grid-percent', `${gridPercent.value.toFixed(2)}%`)
@@ -332,13 +340,13 @@ async function saveWindowState() {
       const appWindow = getCurrentWebviewWindow()
       const isMaximized = await appWindow.isMaximized()
       if (isMaximized) {
-        localStorage.setItem(WINDOW_STATE_KEY, JSON.stringify({ x: 0, y: 0, width: 0, height: 0, isMaximized: true }))
+        await setSetting(WINDOW_STATE_KEY, { x: 0, y: 0, width: 0, height: 0, isMaximized: true })
       } else {
         const position = await appWindow.outerPosition()
         const size = await appWindow.outerSize()
-        localStorage.setItem(WINDOW_STATE_KEY, JSON.stringify({
+        await setSetting(WINDOW_STATE_KEY, {
           x: position.x, y: position.y, width: size.width, height: size.height, isMaximized: false
-        }))
+        })
       }
     } catch (error) {
       console.error('保存窗口状态失败:', error)
@@ -347,27 +355,23 @@ async function saveWindowState() {
 }
 
 async function restoreWindowState() {
-  const savedState = localStorage.getItem(WINDOW_STATE_KEY)
+  const savedState = await getSetting<WindowState | null>(WINDOW_STATE_KEY, null)
   if (!savedState) return
   
   try {
-    const state = JSON.parse(savedState!) as WindowState
-    
     const appWindow = getCurrentWebviewWindow()
     
-    if (state.isMaximized) {
+    if (savedState.isMaximized) {
       await appWindow.maximize()
-    } else if (state.width > 0 && state.height > 0) {
-      // 获取主显示器的工作区域大小作为安全检查
+    } else if (savedState.width > 0 && savedState.height > 0) {
       const innerSize = await appWindow.innerSize()
       const maxWidth = Math.max(1920, innerSize.width + 200)
       const maxHeight = Math.max(1080, innerSize.height + 200)
       
-      // 边界检查：确保窗口不会出现在屏幕外
-      const safeX = Math.max(0, Math.min(state.x, maxWidth - 200))
-      const safeY = Math.max(0, Math.min(state.y, maxHeight - 100))
-      const safeWidth = Math.max(400, Math.min(state.width, maxWidth))
-      const safeHeight = Math.max(300, Math.min(state.height, maxHeight))
+      const safeX = Math.max(0, Math.min(savedState.x, maxWidth - 200))
+      const safeY = Math.max(0, Math.min(savedState.y, maxHeight - 100))
+      const safeWidth = Math.max(400, Math.min(savedState.width, maxWidth))
+      const safeHeight = Math.max(300, Math.min(savedState.height, maxHeight))
       
       await appWindow.setPosition(new PhysicalPosition(safeX, safeY))
       await appWindow.setSize(new PhysicalSize(safeWidth, safeHeight))
@@ -494,30 +498,27 @@ async function openFolderInExplorer(folderPath: string) {
 let unlisten: (() => void) | null = null
 
 onMounted(async () => {
-  // 读取保存的当前缩放比例（优先级最高）
-  const savedCurrentZoom = localStorage.getItem(CURRENT_ZOOM_KEY)
+  const savedCurrentZoom = await getSetting<number | null>(CURRENT_ZOOM_KEY, null)
   if (savedCurrentZoom) {
-    currentZoom.value = parseInt(savedCurrentZoom)
+    currentZoom.value = savedCurrentZoom
     const imagesPerRow = 100 / currentZoom.value
     gridPercent.value = calculatePercentFromImagesPerRow(imagesPerRow)
   } else {
-    const savedGridPercent = localStorage.getItem('gridPercent')
+    const savedGridPercent = await getSetting<number | null>('gridPercent', null)
     if (savedGridPercent) {
-      gridPercent.value = parseFloat(savedGridPercent)
+      gridPercent.value = savedGridPercent
     }
   }
 
-  // 初始化CSS变量
   document.documentElement.style.setProperty('--grid-percent', `${gridPercent.value.toFixed(2)}%`)
 
-  const savedShowSidebar = localStorage.getItem('showSidebar')
-  if (savedShowSidebar !== null) showSidebar.value = savedShowSidebar === 'true'
+  const savedShowSidebar = await getSetting<boolean | null>('showSidebar', null)
+  if (savedShowSidebar !== null) showSidebar.value = savedShowSidebar
 
-  // 读取缩放步长配置
-  const savedZoomStep = localStorage.getItem(ZOOM_STEP_KEY)
-  if (savedZoomStep) zoomStep.value = parseFloat(savedZoomStep)
+  const savedZoomStep = await getSetting<number | null>(ZOOM_STEP_KEY, null)
+  if (savedZoomStep) zoomStep.value = savedZoomStep
 
-  loadRecentFolders()
+  await loadRecentFolders()
   await restoreWindowState()
   
   nextTick(() => {
@@ -588,7 +589,7 @@ onUnmounted(() => {
   closePreview()
 })
 
-watch(showSidebar, (val) => localStorage.setItem('showSidebar', String(val)))
+watch(showSidebar, async (val) => await setSetting('showSidebar', val))
 </script>
 
 <template>
@@ -645,7 +646,7 @@ watch(showSidebar, (val) => localStorage.setItem('showSidebar', String(val)))
         />
       </Transition>
 
-      <main ref="mainContentRef" class="main-content" :class="{ 'drag-over': isDragging }">
+      <main ref="mainContentRef" class="main-content" :class="{ 'drag-over': isDragging, 'no-sidebar': !showSidebar || filteredGroups.length === 0 }">
         <EmptyState 
           v-if="groups.length === 0" 
           :recent-folders="recentFolders"
@@ -821,6 +822,10 @@ watch(showSidebar, (val) => localStorage.setItem('showSidebar', String(val)))
 /* ===== 全局样式 ===== */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+:root {
+  --sidebar-width: 22vw;
+}
+
 html, body, #app {
   height: 100%;
   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
@@ -987,6 +992,12 @@ html, body, #app {
   overflow-y: auto;
   padding: 2.5vh 2vw;
   background: transparent;
+  margin-left: var(--sidebar-width, 22vw);
+  transition: margin-left 0.3s ease;
+}
+
+.main-content.no-sidebar {
+  margin-left: 0;
 }
 
 .main-content.drag-over { 

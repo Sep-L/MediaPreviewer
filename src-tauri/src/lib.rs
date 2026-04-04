@@ -1,9 +1,10 @@
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
 use tauri::Manager;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use log::{info, error};
 use fern::Dispatch;
 use chrono::{Local, Duration};
@@ -407,6 +408,54 @@ fn log_frontend(level: String, message: String) {
     }
 }
 
+fn get_app_data_dir() -> String {
+    let exe_path = std::env::current_exe().unwrap_or_default();
+    let app_dir = exe_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    app_dir.join("data").to_string_lossy().to_string()
+}
+
+fn get_settings_path() -> String {
+    let data_dir = get_app_data_dir();
+    Path::new(&data_dir).join("settings").join("settings.json").to_string_lossy().to_string()
+}
+
+fn ensure_settings_dir() {
+    let settings_dir = Path::new(&get_app_data_dir()).join("settings");
+    if let Err(e) = fs::create_dir_all(&settings_dir) {
+        error!("创建 settings 目录失败: {}", e);
+    }
+}
+
+fn read_settings() -> HashMap<String, Value> {
+    let path = get_settings_path();
+    if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(settings) = serde_json::from_str(&content) {
+            return settings;
+        }
+    }
+    HashMap::new()
+}
+
+fn write_settings(settings: &HashMap<String, Value>) {
+    let path = get_settings_path();
+    if let Ok(json) = serde_json::to_string_pretty(settings) {
+        let _ = fs::write(&path, json);
+    }
+}
+
+#[tauri::command]
+fn get_setting(key: String) -> Option<Value> {
+    let settings = read_settings();
+    settings.get(&key).cloned()
+}
+
+#[tauri::command]
+fn set_setting(key: String, value: Value) {
+    let mut settings = read_settings();
+    settings.insert(key, value);
+    write_settings(&settings);
+}
+
 #[tauri::command]
 async fn open_in_explorer(file_path: String) -> Result<(), String> {
     let path = Path::new(&file_path);
@@ -531,8 +580,34 @@ async fn delete_folder(folder_path: String) -> Result<(), String> {
     Ok(())
 }
 
+fn get_webview2_data_folder() -> String {
+    let exe_path = std::env::current_exe().unwrap_or_default();
+    let app_dir = exe_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    app_dir.join("data").to_string_lossy().to_string()
+}
+
+fn setup_webview2_data_folder() {
+    let webview2_dir = get_webview2_data_folder();
+    
+    info!("正在设置 WebView2 数据目录...");
+    info!("可执行文件路径: {:?}", std::env::current_exe());
+    info!("WebView2 数据目录: {}", webview2_dir);
+    
+    if let Err(e) = std::fs::create_dir_all(&webview2_dir) {
+        error!("创建 WebView2 数据目录失败: {}", e);
+        return;
+    }
+    
+    std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &webview2_dir);
+    info!("WebView2 数据目录设置成功");
+    info!("环境变量 WEBVIEW2_USER_DATA_FOLDER 已设置为: {}", webview2_dir);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 在创建 WebView2 之前设置数据目录
+    setup_webview2_data_folder();
+    
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
@@ -544,7 +619,9 @@ pub fn run() {
             log_frontend,
             open_in_explorer,
             delete_file,
-            delete_folder
+            delete_folder,
+            get_setting,
+            set_setting
         ])
         .setup(|app| {
             // 初始化日志系统
@@ -552,7 +629,78 @@ pub fn run() {
                 eprintln!("日志系统初始化失败: {}", e);
             }
             
+            // 确保 settings 目录存在
+            ensure_settings_dir();
+            
             let window = app.get_webview_window("main").unwrap();
+            
+            // 恢复全屏状态（优先处理，避免与尺寸/位置设置冲突）
+            let is_fullscreen = get_setting("window_fullscreen".to_string())
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if is_fullscreen {
+                let _ = window.set_fullscreen(true);
+                info!("全屏状态恢复: {}", is_fullscreen);
+            } else {
+                // 非全屏时才恢复窗口大小和位置
+                let width: u32 = get_setting("window_width".to_string())
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u32)
+                    .unwrap_or(1200);
+                let height: u32 = get_setting("window_height".to_string())
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u32)
+                    .unwrap_or(800);
+                
+                let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize { width, height }));
+                info!("窗口大小恢复: {}x{}", width, height);
+                
+                let has_saved_position = get_setting("window_x".to_string()).is_some() 
+                    && get_setting("window_y".to_string()).is_some();
+                
+                if has_saved_position {
+                    if let Some(x) = get_setting("window_x".to_string()).and_then(|v| v.as_i64()) {
+                        if let Some(y) = get_setting("window_y".to_string()).and_then(|v| v.as_i64()) {
+                            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: x as i32, y: y as i32 }));
+                            info!("窗口位置恢复: ({}, {})", x, y);
+                        }
+                    }
+                } else {
+                    let _ = window.center();
+                }
+            }
+            
+            // 监听窗口大小变化并保存
+            window.on_window_event(move |event| {
+                match event {
+                    tauri::WindowEvent::Resized(size) => {
+                        let _ = set_setting("window_width".to_string(), serde_json::json!(size.width));
+                        let _ = set_setting("window_height".to_string(), serde_json::json!(size.height));
+                    }
+                    tauri::WindowEvent::Moved(position) => {
+                        let _ = set_setting("window_x".to_string(), serde_json::json!(position.x));
+                        let _ = set_setting("window_y".to_string(), serde_json::json!(position.y));
+                    }
+                    _ => {}
+                }
+            });
+            
+            // 定时检查全屏状态并保存（只在状态变化时写入）
+            let window_for_check = window.clone();
+            std::thread::spawn(move || {
+                let mut last_state = false;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    if let Ok(is_fullscreen) = window_for_check.is_fullscreen() {
+                        if is_fullscreen != last_state {
+                            last_state = is_fullscreen;
+                            let _ = set_setting("window_fullscreen".to_string(), serde_json::json!(is_fullscreen));
+                            info!("全屏状态变化: {}", is_fullscreen);
+                        }
+                    }
+                }
+            });
+            
             // 设置窗口图标
             let icon_bytes = include_bytes!("../icons/128x128.png");
             if let Ok(img) = image::load_from_memory(icon_bytes) {
@@ -561,6 +709,8 @@ pub fn run() {
                 let icon = tauri::image::Image::new_owned(rgba.into_raw(), width, height);
                 let _ = window.set_icon(icon);
             }
+            
+            // 先设置窗口大小和位置，最后再显示窗口，避免闪烁
             // 确保窗口可见并获得焦点
             let _ = window.show();
             let _ = window.set_focus();

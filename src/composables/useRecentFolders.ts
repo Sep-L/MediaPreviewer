@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { getSetting, setSetting } from './useSettings'
 
 const RECENT_FOLDERS_KEY = 'recentFolders'
 const MAX_RECENT_FOLDERS = 10
@@ -12,22 +13,19 @@ export interface RecentFolder {
 const recentFolders = ref<RecentFolder[]>([])
 
 export function useRecentFolders() {
-  function loadRecentFolders() {
+  async function loadRecentFolders() {
     try {
-      const saved = localStorage.getItem(RECENT_FOLDERS_KEY)
-      if (saved) {
-        recentFolders.value = JSON.parse(saved)
-      }
+      recentFolders.value = await getSetting<RecentFolder[]>(RECENT_FOLDERS_KEY, [])
     } catch (error) {
       console.error('加载最近文件夹失败:', error)
     }
   }
 
-  function saveRecentFolders() {
-    localStorage.setItem(RECENT_FOLDERS_KEY, JSON.stringify(recentFolders.value))
+  async function saveRecentFolders() {
+    await setSetting(RECENT_FOLDERS_KEY, recentFolders.value)
   }
 
-  function addToRecentFolders(folderPaths: string[]) {
+  async function addToRecentFolders(folderPaths: string[]) {
     const now = Date.now()
     
     folderPaths.forEach(path => {
@@ -48,12 +46,12 @@ export function useRecentFolders() {
       recentFolders.value = recentFolders.value.slice(0, MAX_RECENT_FOLDERS)
     }
     
-    saveRecentFolders()
+    await saveRecentFolders()
   }
 
-  function removeFromRecentFolders(path: string) {
+  async function removeFromRecentFolders(path: string) {
     recentFolders.value = recentFolders.value.filter(f => f.path !== path)
-    saveRecentFolders()
+    await saveRecentFolders()
   }
 
   return {

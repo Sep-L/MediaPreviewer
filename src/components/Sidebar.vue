@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import type { FolderGroup } from '../types'
+import { getSetting, setSetting } from '../composables/useSettings'
 
 const props = defineProps<{
   groups: FolderGroup[]
@@ -14,6 +15,22 @@ const emit = defineEmits<{
   (e: 'openInExplorer', folderPath: string): void
   (e: 'toggleExpand', folderPath: string): void
 }>()
+
+const SIDEBAR_WIDTH_KEY = 'sidebar-width'
+const DEFAULT_WIDTH = 220
+
+const sidebarWidth = ref(DEFAULT_WIDTH)
+const drawerRef = ref<HTMLElement | null>(null)
+const isResizing = ref(false)
+
+onMounted(async () => {
+  sidebarWidth.value = await getSetting(SIDEBAR_WIDTH_KEY, DEFAULT_WIDTH)
+  document.addEventListener('click', handleClickOutside)
+  if (drawerRef.value) {
+    drawerRef.value.style.width = sidebarWidth.value + 'px'
+    document.documentElement.style.setProperty('--sidebar-width', sidebarWidth.value + 'px')
+  }
+})
 
 // 右键菜单状态
 const contextMenuVisible = ref(false)
@@ -71,6 +88,49 @@ function toggleExpand(group: FolderGroup) {
   emit('toggleExpand', group.folder_path)
 }
 
+function startResize(e: MouseEvent) {
+  e.preventDefault()
+  isResizing.value = true
+  document.body.style.cursor = 'ew-resize'
+  document.body.style.userSelect = 'none'
+  document.documentElement.style.cursor = 'ew-resize'
+  
+  const drawer = drawerRef.value
+  if (!drawer) return
+  
+  drawer.classList.add('resizing')
+  
+  const startX = e.clientX
+  const startWidth = drawer.offsetWidth
+  const minWidth = 200
+  const maxWidth = 500
+  
+  let currentWidth = startWidth
+  
+  const onMove = (moveEvent: MouseEvent) => {
+    const delta = moveEvent.clientX - startX
+    const newWidth = startWidth + delta
+    currentWidth = Math.max(minWidth, Math.min(maxWidth, newWidth))
+    document.documentElement.style.setProperty('--sidebar-width', currentWidth + 'px')
+    drawer.style.width = currentWidth + 'px'
+  }
+  
+  const onUp = async () => {
+    sidebarWidth.value = currentWidth
+    await setSetting(SIDEBAR_WIDTH_KEY, currentWidth)
+    isResizing.value = false
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    document.documentElement.style.cursor = ''
+    drawer.classList.remove('resizing')
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+  }
+  
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
+
 // 检查文件夹是否有子文件夹
 function hasChildren(group: FolderGroup): boolean {
   return props.groups.some(g => {
@@ -122,17 +182,14 @@ const visibleGroups = computed(() => {
   })
 })
 
-onMounted(() => {
-  document.addEventListener('click', handleClickOutside)
-})
-
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
 })
 </script>
 
 <template>
-  <aside class="drawer">
+  <aside class="drawer" ref="drawerRef">
+    <div class="resize-handle" @mousedown="startResize"></div>
     <div class="drawer-header">
       <div class="drawer-icon">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
@@ -246,17 +303,51 @@ onUnmounted(() => {
 
 <style scoped>
 .drawer {
+  position: fixed;
+  top: 8vh;
+  left: 0;
   width: 22vw;
-  min-width: 240px;
-  max-width: 320px;
+  height: calc(100vh - 8vh);
   background: rgba(255, 255, 255, 0.95);
   backdrop-filter: blur(1.5vh);
   -webkit-backdrop-filter: blur(1.5vh);
   border-right: 1px solid rgba(0, 0, 0, 0.06);
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
   box-shadow: 0.3vw 0 1.8vh rgba(0, 0, 0, 0.06);
+  z-index: 50;
+}
+
+.drawer.resizing {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 10;
+}
+
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 3px;
+  height: 40px;
+  background: transparent;
+  border-radius: 2px;
+  transition: background 0.2s;
+}
+
+.resize-handle:hover::after {
+  background: rgba(59, 130, 246, 0.4);
 }
 
 .drawer-header {
