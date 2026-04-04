@@ -8,8 +8,9 @@
       <input 
         v-model.number="inputValue"
         type="number"
-        step="0.1"
-        min="0.1"
+        step="1"
+        min="1"
+        max="100"
         class="zoom-step-input"
         @change="handleInputChange"
         @click.stop
@@ -66,23 +67,24 @@ watch(() => props.modelValue, (newVal) => {
 })
 
 const options = [
-  { value: 10, label: '10% (一行 10 张)' },
-  { value: 20, label: '20% (一行 5 张)' },
-  { value: 25, label: '25% (一行 4 张)' },
-  { value: 33, label: '33% (一行 3 张)' },
-  { value: 50, label: '50% (一行 2 张)' }
+  { value: 1, label: '1% (Ctrl+滚轮调整1%)' },
+  { value: 2, label: '2% (Ctrl+滚轮调整2%)' },
+  { value: 3, label: '3% (Ctrl+滚轮调整3%)' },
+  { value: 4, label: '4% (Ctrl+滚轮调整4%)' },
+  { value: 5, label: '5% (Ctrl+滚轮调整5%)' }
 ]
 
 function handleInputChange() {
   let value = inputValue.value
-  // 限制最小值
-  if (value < 0.1) value = 0.1
+  if (value < 1) value = 1
+  if (value > 100) value = 100
   inputValue.value = value
   emit('update:modelValue', value)
   emit('change', value)
 }
 
 function selectOption(value: number) {
+  inputValue.value = value
   emit('update:modelValue', value)
   emit('change', value)
   isOpen.value = false

@@ -266,12 +266,17 @@ function handleKeydown(event: KeyboardEvent) {
 async function handleWheel(event: WheelEvent) {
   if (!event.ctrlKey) return
   event.preventDefault()
-  const stepPercent = zoomStep.value / 100
-  const delta = event.deltaY > 0 ? -stepPercent : stepPercent
-  gridPercent.value = Math.max(1, gridPercent.value * (1 + delta))
-  // 更新 CSS 变量（百分比），浏览器自动响应
+  
+  // 直接调整 currentZoom（缩放比例）
+  const delta = event.deltaY > 0 ? -zoomStep.value : zoomStep.value
+  currentZoom.value = Math.max(1, Math.min(100, currentZoom.value + delta))
+  
+  // currentZoom=20 对应一行5张，所以 imagesPerRow = 100 / currentZoom = 5
+  const imagesPerRow = 100 / currentZoom.value
+  gridPercent.value = calculatePercentFromImagesPerRow(imagesPerRow)
   document.documentElement.style.setProperty('--grid-percent', `${gridPercent.value.toFixed(2)}%`)
-  document.documentElement.style.setProperty('--grid-percent', `${gridPercent.value.toFixed(2)}%`)
+  
+  await setSetting(CURRENT_ZOOM_KEY, currentZoom.value)
   await setSetting('gridPercent', gridPercent.value)
 }
 
@@ -315,6 +320,7 @@ function updateActiveFolder() {
 // 存储配置的方法
 async function saveZoomStep() {
   await setSetting(ZOOM_STEP_KEY, zoomStep.value)
+  console.log('缩放步长已保存:', zoomStep.value)
 }
 
 // 根据期望的每行图片数量计算实际的 百分比
