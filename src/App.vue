@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { invoke, isTauri } from '@tauri-apps/api/core'
-import { PhysicalPosition, PhysicalSize } from '@tauri-apps/api/window'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import type { MediaFile, FolderGroup, ReadFolderResult, FileFilter } from './types'
@@ -9,7 +8,10 @@ import type { MediaFile, FolderGroup, ReadFolderResult, FileFilter } from './typ
 import { useThumbnail } from './composables/useThumbnail'
 import { usePreview } from './composables/usePreview'
 import { useRecentFolders } from './composables/useRecentFolders'
+import { useWindowState } from './composables/useWindowState'
+import { useZoom } from './composables/useZoom'
 import { getSetting, setSetting } from './composables/useSettings'
+import { MIN_GRID_SIZE } from './constants'
 
 import Sidebar from './components/Sidebar.vue'
 import EmptyState from './components/EmptyState.vue'
@@ -20,6 +22,10 @@ import FileInfoPanel from './components/FileInfoPanel.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import ZoomStepSelector from './components/ZoomStepSelector.vue'
 import CurrentZoomSelector from './components/CurrentZoomSelector.vue'
+
+// 使用 composables
+const windowState = useWindowState()
+const zoom = useZoom()
 
 const groups = ref<FolderGroup[]>([])
 const currentFilter = ref<FileFilter>('all')
@@ -50,11 +56,6 @@ interface WindowState {
 }
 let saveWindowStateTimeout: ReturnType<typeof setTimeout> | null = null
 
-// Grid 设置 - 使用百分比，浏览器自动响应容器变化
-const MIN_GRID_SIZE = 60  // 最小列宽(px)
-const DEFAULT_GRID_PERCENT = 10  // 默认占容器宽度的百分比
-const gridPercent = ref(DEFAULT_GRID_PERCENT)
-
 // 容器宽度（用于计算缩略图尺寸）
 const containerWidth = ref(0)
 let resizeObserver: ResizeObserver | null = null
@@ -62,19 +63,9 @@ let resizeObserver: ResizeObserver | null = null
 // 根据百分比和容器宽度计算实际像素值（仅用于缩略图加载）
 function getGridSizePx(): number {
   return containerWidth.value > 0 
-    ? Math.max(MIN_GRID_SIZE, (gridPercent.value / 100) * containerWidth.value)
-    : Math.max(MIN_GRID_SIZE, (gridPercent.value / 100) * window.innerWidth)
+    ? Math.max(MIN_GRID_SIZE, (zoom.gridPercent.value / 100) * containerWidth.value)
+    : Math.max(MIN_GRID_SIZE, (zoom.gridPercent.value / 100) * window.innerWidth)
 }
-
-// 缩放步长配置（百分比）
-const ZOOM_STEP_KEY = 'zoomStep'
-const DEFAULT_ZOOM_STEP = 1
-const zoomStep = ref(DEFAULT_ZOOM_STEP)
-
-// 当前缩放比例配置（百分比）
-const CURRENT_ZOOM_KEY = 'currentZoom'
-const DEFAULT_CURRENT_ZOOM = 10
-const currentZoom = ref(DEFAULT_CURRENT_ZOOM)
 
 // 计算属性（必须在 usePreview 之前定义）
 const allFiles = computed(() => groups.value.flatMap(g => g.files))
@@ -264,20 +255,7 @@ function handleKeydown(event: KeyboardEvent) {
 
 // 滚轮事件 - Ctrl+滚轮调整图片大小
 async function handleWheel(event: WheelEvent) {
-  if (!event.ctrlKey) return
-  event.preventDefault()
-  
-  // 直接调整 currentZoom（缩放比例）
-  const delta = event.deltaY > 0 ? -zoomStep.value : zoomStep.value
-  currentZoom.value = Math.max(1, Math.min(100, currentZoom.value + delta))
-  
-  // currentZoom=20 对应一行5张，所以 imagesPerRow = 100 / currentZoom = 5
-  const imagesPerRow = 100 / currentZoom.value
-  gridPercent.value = calculatePercentFromImagesPerRow(imagesPerRow)
-  document.documentElement.style.setProperty('--grid-percent', `${gridPercent.value.toFixed(2)}%`)
-  
-  await setSetting(CURRENT_ZOOM_KEY, currentZoom.value)
-  await setSetting('gridPercent', gridPercent.value)
+  await zoom.handleWheel(event)
 }
 
 // 防抖更新当前高亮的文件夹
@@ -318,73 +296,14 @@ function updateActiveFolder() {
 }
 
 // 存储配置的方法
-async function saveZoomStep() {
-  await setSetting(ZOOM_STEP_KEY, zoomStep.value)
-  console.log('缩放步长已保存:', zoomStep.value)
+async function onZoomStepChange(value: number) {
+  zoom.zoomStep.value = value
+  await zoom.saveZoomStep()
 }
 
-// 根据期望的每行图片数量计算实际的 百分比
-function calculatePercentFromImagesPerRow(imagesPerRow: number): number {
-  const availableWidth = 100 - 2
-  const imageWidth = availableWidth / imagesPerRow
-  return imageWidth
-}
-
-async function saveCurrentZoom() {
-  await setSetting(CURRENT_ZOOM_KEY, currentZoom.value)
-  const imagesPerRow = 100 / currentZoom.value
-  gridPercent.value = calculatePercentFromImagesPerRow(imagesPerRow)
-  document.documentElement.style.setProperty('--grid-percent', `${gridPercent.value.toFixed(2)}%`)
-}
-
-// 窗口状态保存
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-async function saveWindowState() {
-  if (saveWindowStateTimeout) clearTimeout(saveWindowStateTimeout)
-  saveWindowStateTimeout = setTimeout(async () => {
-    try {
-      const appWindow = getCurrentWebviewWindow()
-      const isMaximized = await appWindow.isMaximized()
-      if (isMaximized) {
-        await setSetting(WINDOW_STATE_KEY, { x: 0, y: 0, width: 0, height: 0, isMaximized: true })
-      } else {
-        const position = await appWindow.outerPosition()
-        const size = await appWindow.outerSize()
-        await setSetting(WINDOW_STATE_KEY, {
-          x: position.x, y: position.y, width: size.width, height: size.height, isMaximized: false
-        })
-      }
-    } catch (error) {
-      console.error('保存窗口状态失败:', error)
-    }
-  }, 300)
-}
-
-async function restoreWindowState() {
-  const savedState = await getSetting<WindowState | null>(WINDOW_STATE_KEY, null)
-  if (!savedState) return
-  
-  try {
-    const appWindow = getCurrentWebviewWindow()
-    
-    if (savedState.isMaximized) {
-      await appWindow.maximize()
-    } else if (savedState.width > 0 && savedState.height > 0) {
-      const innerSize = await appWindow.innerSize()
-      const maxWidth = Math.max(1920, innerSize.width + 200)
-      const maxHeight = Math.max(1080, innerSize.height + 200)
-      
-      const safeX = Math.max(0, Math.min(savedState.x, maxWidth - 200))
-      const safeY = Math.max(0, Math.min(savedState.y, maxHeight - 100))
-      const safeWidth = Math.max(400, Math.min(savedState.width, maxWidth))
-      const safeHeight = Math.max(300, Math.min(savedState.height, maxHeight))
-      
-      await appWindow.setPosition(new PhysicalPosition(safeX, safeY))
-      await appWindow.setSize(new PhysicalSize(safeWidth, safeHeight))
-    }
-  } catch (error) {
-    console.error('恢复窗口状态失败:', error)
-  }
+async function onCurrentZoomChange(value: number) {
+  zoom.currentZoom.value = value
+  await zoom.saveCurrentZoom()
 }
 
 // 右键菜单
@@ -504,28 +423,13 @@ async function openFolderInExplorer(folderPath: string) {
 let unlisten: (() => void) | null = null
 
 onMounted(async () => {
-  const savedCurrentZoom = await getSetting<number | null>(CURRENT_ZOOM_KEY, null)
-  if (savedCurrentZoom) {
-    currentZoom.value = savedCurrentZoom
-    const imagesPerRow = 100 / currentZoom.value
-    gridPercent.value = calculatePercentFromImagesPerRow(imagesPerRow)
-  } else {
-    const savedGridPercent = await getSetting<number | null>('gridPercent', null)
-    if (savedGridPercent) {
-      gridPercent.value = savedGridPercent
-    }
-  }
-
-  document.documentElement.style.setProperty('--grid-percent', `${gridPercent.value.toFixed(2)}%`)
-
+  await zoom.init()
+  
   const savedShowSidebar = await getSetting<boolean | null>('showSidebar', null)
   if (savedShowSidebar !== null) showSidebar.value = savedShowSidebar
 
-  const savedZoomStep = await getSetting<number | null>(ZOOM_STEP_KEY, null)
-  if (savedZoomStep) zoomStep.value = savedZoomStep
-
   await loadRecentFolders()
-  await restoreWindowState()
+  await windowState.restoreWindowState()
   
   nextTick(() => {
     if (mainContentRef.value) {
@@ -622,16 +526,16 @@ watch(showSidebar, async (val) => await setSetting('showSidebar', val))
         <div class="zoom-step-wrapper">
           <span class="zoom-step-label">当前缩放</span>
           <CurrentZoomSelector
-            v-model="currentZoom"
-            @change="saveCurrentZoom"
+            v-model="zoom.currentZoom.value"
+            @change="onCurrentZoomChange"
             title="当前缩放比例"
           />
         </div>
         <div class="zoom-step-wrapper">
           <span class="zoom-step-label">缩放步长</span>
           <ZoomStepSelector
-            v-model="zoomStep"
-            @change="saveZoomStep"
+            v-model="zoom.zoomStep.value"
+            @change="onZoomStepChange"
             title="Ctrl+滚轮缩放步长"
           />
         </div>

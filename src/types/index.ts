@@ -20,3 +20,14 @@ export interface ReadFolderResult {
 }
 
 export type FileFilter = 'all' | 'image' | 'other'
+
+export interface FileTypeCount {
+  all: number
+  image: number
+  other: number
+}
+
+export interface FolderSortInfo {
+  path: string
+  element: HTMLElement | null
+}
