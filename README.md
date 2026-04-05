@@ -47,9 +47,11 @@ MediaPreviewer/
 │   ├── composables/            # Vue 组合式函数
 │   │   ├── useThumbnail.ts     # 缩略图加载与缓存管理
 │   │   ├── usePreview.ts       # 图片预览状态（缩放/旋转/导航）
-│   │   └── useRecentFolders.ts # 最近文件夹记录
-│   └── types/                  # TypeScript 类型定义
-│       └── index.ts
+│   │   ├── useRecentFolders.ts # 最近文件夹记录
+│   │   ├── useZoom.ts          # 缩放比例与网格计算
+│   │   └── useWindowState.ts   # 窗口状态保存与恢复
+│   ├── constants/              # 常量定义
+│   └── utils/                  # 工具函数
 ├── src-tauri/                  # Rust 后端源码
 │   ├── src/
 │   │   ├── lib.rs              # Tauri 命令实现

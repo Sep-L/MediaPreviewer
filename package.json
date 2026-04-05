@@ -1,7 +1,9 @@
 {
-  "name": "tauri-app",
+  "name": "media-previewer",
   "private": true,
   "version": "0.1.0",
+  "description": "基于 Tauri 2 + Vue 3 的本地媒体文件预览工具",
+  "keywords": ["media", "preview", "image-viewer", "tauri", "vue3", "desktop"],
   "type": "module",
   "scripts": {
     "dev": "vite",
